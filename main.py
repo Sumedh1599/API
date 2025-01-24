@@ -77,36 +77,37 @@ async def scrape_jobs(company, country):
                 await asyncio.sleep(random.uniform(2, 4))
             await page.wait_for_timeout(5000)
 
-            job_cards = await page.query_selector_all(".base-card")
-            logger.info(f"Found {len(job_cards)} job cards.")
+            while True:  # Loop through pages
+                job_cards = await page.query_selector_all(".base-card")
+                logger.info(f"Found {len(job_cards)} job cards on the current page.")
 
-            for job_card in job_cards:
-                try:
-                    title = await job_card.query_selector(".base-search-card__title")
-                    company_name = await job_card.query_selector(".base-search-card__subtitle")
-                    location = await job_card.query_selector(".job-search-card__location")
-                    apply_link = await job_card.query_selector("a.base-card__full-link")
+                for job_card in job_cards:
+                    try:
+                        title = await job_card.query_selector(".base-search-card__title")
+                        company_name = await job_card.query_selector(".base-search-card__subtitle")
+                        location = await job_card.query_selector(".job-search-card__location")
+                        apply_link = await job_card.query_selector("a.base-card__full-link")
 
-                    title = await title.evaluate("el => el.textContent.trim()") if title else "N/A"
-                    company_name = await company_name.evaluate("el => el.textContent.trim()") if company_name else "N/A"
-                    location = await location.evaluate("el => el.textContent.trim()") if location else "N/A"
-                    apply_link = await apply_link.get_attribute("href") if apply_link else "N/A"
+                        title = await title.evaluate("el => el.textContent.trim()") if title else "N/A"
+                        company_name = await company_name.evaluate("el => el.textContent.trim()") if company_name else "N/A"
+                        location = await location.evaluate("el => el.textContent.trim()") if location else "N/A"
+                        apply_link = await apply_link.get_attribute("href") if apply_link else "N/A"
 
-                    results.append({
-                        "title": title,
-                        "company": company_name,
-                        "location": location,
-                        "apply_link": apply_link,
-                    })
-                except Exception as e:
-                    logger.error(f"Error processing job card: {e}")
+                        results.append({
+                            "title": title,
+                            "company": company_name,
+                            "location": location,
+                            "apply_link": apply_link,
+                        })
+                    except Exception as e:
+                        logger.error(f"Error processing job card: {e}")
 
-            next_button = await page.query_selector("button[aria-label='Next']")
-            if next_button and await next_button.is_enabled():
-                await next_button.click()
-                await asyncio.sleep(random.uniform(2, 5))
-            else:
-                break
+                next_button = await page.query_selector("button[aria-label='Next']")
+                if next_button and await next_button.is_enabled():
+                    await next_button.click()
+                    await asyncio.sleep(random.uniform(2, 5))
+                else:
+                    break
 
         except Exception as e:
             logger.error(f"Error during scraping: {e}")
