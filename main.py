@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright_stealth import stealth_sync
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,12 +50,9 @@ async def scrape_jobs(company, country):
     url = f"https://www.linkedin.com/jobs/search/?keywords={query}&location={country}"
 
     async with async_playwright() as p:
-        # Rotate through proxies
         for proxy in PROXY_LIST:
             try:
                 print(f"Using proxy: {proxy}")
-
-                # Launch browser with stealth and proxy support
                 browser = await p.chromium.launch(
                     headless=True,
                     args=[
@@ -74,13 +71,16 @@ async def scrape_jobs(company, country):
                 page = await context.new_page()
                 await stealth_sync(page)  # Apply stealth mode to bypass bot detection
 
-                # Navigate to the LinkedIn job search page
                 await page.goto(url, timeout=60000)
 
-                # Scrape jobs from multiple pages
+                # Scroll to the bottom to load all jobs
+                for _ in range(5):  # Adjust based on the number of jobs
+                    await page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
+                    await asyncio.sleep(random.uniform(1, 2))
+
+                # Scrape jobs
                 while True:
                     try:
-                        # Wait for job cards to load
                         await page.wait_for_selector(".base-card", timeout=15000)
                         job_cards = await page.query_selector_all(".base-card")
 
@@ -105,13 +105,12 @@ async def scrape_jobs(company, country):
                                         await job_page.goto(apply_link, timeout=30000)
                                         await asyncio.sleep(random.uniform(1, 2))  # Mimic human browsing delay
 
-                                        # Try different selectors for the description
                                         selectors = [
-                                            ".show-more-less-html__markup",  # Main description
-                                            ".description__text",  # Alternative description
-                                            ".job-description",  # Fallback
-                                            "#job-details",  # Fallback for older layouts
-                                            ".jobs-box__html-content"  # Alternative fallback
+                                            ".show-more-less-html__markup",
+                                            ".description__text",
+                                            ".job-description",
+                                            "#job-details",
+                                            ".jobs-box__html-content"
                                         ]
                                         for selector in selectors:
                                             try:
@@ -126,7 +125,6 @@ async def scrape_jobs(company, country):
                                     except Exception as desc_err:
                                         print(f"Error fetching job description: {desc_err}")
 
-                                # Add job details to results
                                 results.append({
                                     "title": title.strip(),
                                     "company": company_name.strip(),
@@ -138,7 +136,7 @@ async def scrape_jobs(company, country):
                             except Exception as e:
                                 print(f"Error processing job card: {e}")
 
-                        # Check for the next page
+                        # Check for next page
                         next_button = await page.query_selector("button[aria-label='Next']")
                         if next_button and await next_button.is_enabled():
                             await asyncio.sleep(random.uniform(2, 4))  # Mimic human behavior
@@ -146,12 +144,15 @@ async def scrape_jobs(company, country):
                             await page.wait_for_load_state("networkidle")
                         else:
                             break  # Exit loop if no more pages
+                    except PlaywrightTimeoutError:
+                        print("Timeout while waiting for job cards.")
+                        break
                     except Exception as e:
                         print(f"Error during scraping: {e}")
                         break
 
                 await browser.close()
-                break  # Exit the proxy loop if successful
+                break  # Exit proxy loop if successful
             except Exception as proxy_error:
                 print(f"Proxy {proxy} failed: {proxy_error}")
                 continue  # Try the next proxy
