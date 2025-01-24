@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
 from playwright_stealth import stealth_sync
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +11,7 @@ import asyncio
 API_KEY = "sumedh1599_secret_key_xyz"
 API_KEY_NAME = "x-api-key"
 
-# Proxy List
+# Proxy List (Update these with working proxies)
 PROXY_LIST = [
     "http://proxy1:port",
     "http://proxy2:port",
@@ -43,7 +43,7 @@ class JobSearchRequest(BaseModel):
     company: str
     country: str
 
-# Scraping function
+# Advanced scraping function
 async def scrape_jobs(company, country):
     results = []
     query = "%20".join(company.split())
@@ -144,9 +144,6 @@ async def scrape_jobs(company, country):
                             await page.wait_for_load_state("networkidle")
                         else:
                             break  # Exit loop if no more pages
-                    except PlaywrightTimeoutError:
-                        print("Timeout while waiting for job cards.")
-                        break
                     except Exception as e:
                         print(f"Error during scraping: {e}")
                         break
