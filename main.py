@@ -21,28 +21,28 @@ async def validate_api_key(api_key: str = Depends(api_key_header)):
 # Initialize FastAPI app
 app = FastAPI()
 
-# Enable CORS for cross-origin requests
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allow all origins (for testing)
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
 )
 
 # Define request model
 class JobSearchRequest(BaseModel):
     company: str
     country: str
-    max_pages: int = 1  # Default to 1 page if not specified
 
 # Scraping function
-async def scrape_jobs(company, country, max_pages):
+async def scrape_jobs(company, country):
     results = []
     query = "%20".join(company.split())
     url = f"https://www.linkedin.com/jobs/search/?keywords={query}&location={country}"
 
     async with async_playwright() as p:
+        # Launch the browser with Render-compatible flags
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -57,15 +57,16 @@ async def scrape_jobs(company, country, max_pages):
         page = await context.new_page()
 
         try:
-            await page.goto(url, timeout=30000)
+            await page.goto(url, timeout=60000)
+            total_jobs = 0
 
-            for page_num in range(max_pages):
+            # Scrape jobs from multiple pages
+            while True:
                 try:
                     # Wait for job cards to load
                     await page.wait_for_selector(".base-card", timeout=15000)
                     job_cards = await page.query_selector_all(".base-card")
 
-                    # Process all job cards on the current page
                     for job_card in job_cards:
                         try:
                             title_element = await job_card.query_selector(".base-search-card__title")
@@ -84,20 +85,20 @@ async def scrape_jobs(company, country, max_pages):
                             if company.lower().strip() != company_name.lower().strip():
                                 continue
 
-                            # Fetch job description
                             description = "Description not available"
                             if apply_link != "N/A":
                                 try:
                                     job_page = await context.new_page()
-                                    await job_page.goto(apply_link, timeout=20000)
-                                    await asyncio.sleep(1)
+                                    await job_page.goto(apply_link, timeout=30000)
+                                    await asyncio.sleep(random.uniform(1, 2))  # Mimic human browsing delay
 
+                                    # Try different selectors for the description
                                     selectors = [
-                                        ".show-more-less-html__markup",
-                                        ".description__text",
-                                        ".job-description",
-                                        "#job-details",
-                                        ".jobs-box__html-content"
+                                        ".show-more-less-html__markup",  # Main description
+                                        ".description__text",  # Alternative description
+                                        ".job-description",  # Fallback
+                                        "#job-details",  # Fallback for older layouts
+                                        ".jobs-box__html-content"  # Alternative fallback
                                     ]
                                     for selector in selectors:
                                         try:
@@ -112,7 +113,7 @@ async def scrape_jobs(company, country, max_pages):
                                 except Exception as desc_err:
                                     print(f"Error fetching job description: {desc_err}")
 
-                            # Append the job to the results
+                            # Add job details to results
                             results.append({
                                 "title": title.strip(),
                                 "company": company_name.strip(),
@@ -120,24 +121,22 @@ async def scrape_jobs(company, country, max_pages):
                                 "description": description.strip(),
                                 "apply_link": apply_link,
                             })
-                        except Exception as card_err:
-                            print(f"Error processing job card: {card_err}")
+                            total_jobs += 1
 
-                    # Move to the next page
+                        except Exception as e:
+                            print(f"Error processing job card: {e}")
+
+                    # Check for the next page
                     next_button = await page.query_selector("button[aria-label='Next']")
                     if next_button and await next_button.is_enabled():
+                        await asyncio.sleep(random.uniform(2, 4))  # Mimic human behavior
                         await next_button.click()
                         await page.wait_for_load_state("networkidle")
                     else:
-                        break  # No more pages
-
-                except Exception as page_err:
-                    print(f"Error on page {page_num + 1}: {page_err}")
+                        break  # Exit loop if no more pages
+                except Exception as e:
+                    print(f"Error during scraping: {e}")
                     break
-
-        except Exception as main_err:
-            print(f"Error during scraping: {main_err}")
-            raise HTTPException(status_code=500, detail="An error occurred while scraping jobs.")
         finally:
             await browser.close()
 
@@ -148,6 +147,5 @@ async def scrape_jobs(company, country, max_pages):
 async def search_jobs(request: JobSearchRequest):
     company = request.company
     country = request.country
-    max_pages = request.max_pages
-    jobs = await scrape_jobs(company, country, max_pages)
+    jobs = await scrape_jobs(company, country)
     return {"jobs": jobs}
