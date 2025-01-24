@@ -11,7 +11,6 @@ import random
 API_KEY = "sumedh1599_secret_key_xyz"
 API_KEY_NAME = "x-api-key"
 
-# Define API key dependency
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
 async def validate_api_key(api_key: str = Depends(api_key_header)):
@@ -19,33 +18,31 @@ async def validate_api_key(api_key: str = Depends(api_key_header)):
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return True
 
-# Initialize FastAPI app
 app = FastAPI()
 
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Define request model
 class JobSearchRequest(BaseModel):
     company: str
     country: str
 
-# Scraping function
 async def scrape_jobs(company, country):
     results = []
     query = "%20".join(company.split())
     url = f"https://www.linkedin.com/jobs/search/?keywords={query}&location={country}"
 
     async with async_playwright() as p:
+        proxy = "http://username:password@proxy-address:port"  # Replace with your proxy credentials
         browser = await p.chromium.launch(
             headless=True,
             args=[
+                f"--proxy-server={proxy}",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
@@ -57,86 +54,45 @@ async def scrape_jobs(company, country):
             locale="en-US",
         )
         page = await context.new_page()
-
-        # Apply stealth mode
         await stealth_sync(page)
 
         try:
             await page.goto(url, timeout=60000)
 
-            # Scroll to load more jobs
-            for _ in range(10):  # Adjust the range as needed
+            for _ in range(15):  # Scroll 15 times
                 await page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
-                await asyncio.sleep(random.uniform(1, 3))
+                await asyncio.sleep(random.uniform(2, 4))
+            
+            await page.wait_for_timeout(5000)
 
-            # Scrape jobs
             while True:
-                try:
-                    await page.wait_for_selector(".base-card", timeout=15000)
-                    job_cards = await page.query_selector_all(".base-card")
+                job_cards = await page.query_selector_all(".base-card")
+                for job_card in job_cards:
+                    try:
+                        title = await job_card.query_selector(".base-search-card__title")
+                        company_name = await job_card.query_selector(".base-search-card__subtitle")
+                        location = await job_card.query_selector(".job-search-card__location")
+                        apply_link = await job_card.query_selector("a.base-card__full-link")
 
-                    for job_card in job_cards:
-                        try:
-                            title_element = await job_card.query_selector(".base-search-card__title")
-                            title = await title_element.evaluate("el => el.textContent.trim()") if title_element else "N/A"
+                        title = await title.evaluate("el => el.textContent.trim()") if title else "N/A"
+                        company_name = await company_name.evaluate("el => el.textContent.trim()") if company_name else "N/A"
+                        location = await location.evaluate("el => el.textContent.trim()") if location else "N/A"
+                        apply_link = await apply_link.get_attribute("href") if apply_link else "N/A"
 
-                            company_element = await job_card.query_selector(".base-search-card__subtitle")
-                            company_name = await company_element.evaluate("el => el.textContent.trim()") if company_element else "N/A"
+                        results.append({
+                            "title": title,
+                            "company": company_name,
+                            "location": location,
+                            "apply_link": apply_link,
+                        })
+                    except Exception as e:
+                        print(f"Error processing job card: {e}")
 
-                            location_element = await job_card.query_selector(".job-search-card__location")
-                            location = await location_element.evaluate("el => el.textContent.trim()") if location_element else "N/A"
-
-                            apply_link_element = await job_card.query_selector("a.base-card__full-link")
-                            apply_link = await apply_link_element.get_attribute("href") if apply_link_element else "N/A"
-
-                            description = "Description not available"
-                            if apply_link != "N/A":
-                                try:
-                                    job_page = await context.new_page()
-                                    await job_page.goto(apply_link, timeout=30000)
-                                    await asyncio.sleep(random.uniform(1, 2))  # Mimic human browsing delay
-
-                                    selectors = [
-                                        ".show-more-less-html__markup",
-                                        ".description__text",
-                                        ".job-description",
-                                        "#job-details",
-                                        ".jobs-box__html-content"
-                                    ]
-                                    for selector in selectors:
-                                        try:
-                                            description_element = await job_page.query_selector(selector)
-                                            if description_element:
-                                                description = await description_element.evaluate("el => el.textContent.trim()")
-                                                break
-                                        except Exception:
-                                            pass
-
-                                    await job_page.close()
-                                except Exception as desc_err:
-                                    print(f"Error fetching job description: {desc_err}")
-
-                            results.append({
-                                "title": title.strip(),
-                                "company": company_name.strip(),
-                                "location": location.strip(),
-                                "description": description.strip(),
-                                "apply_link": apply_link,
-                            })
-
-                        except Exception as e:
-                            print(f"Error processing job card: {e}")
-
-                    # Check for next page
-                    next_button = await page.query_selector("button[aria-label='Next']")
-                    if next_button and await next_button.is_enabled():
-                        await asyncio.sleep(random.uniform(2, 4))
-                        await next_button.click()
-                        await page.wait_for_load_state("networkidle")
-                    else:
-                        break
-                except Exception as e:
-                    print(f"Error during scraping: {e}")
+                next_button = await page.query_selector("button[aria-label='Next']")
+                if next_button and await next_button.is_enabled():
+                    await next_button.click()
+                    await asyncio.sleep(random.uniform(2, 5))
+                else:
                     break
 
         finally:
@@ -144,10 +100,7 @@ async def scrape_jobs(company, country):
 
     return results
 
-# API endpoint for job search
 @app.post("/search_jobs/", dependencies=[Depends(validate_api_key)])
 async def search_jobs(request: JobSearchRequest):
-    company = request.company
-    country = request.country
-    jobs = await scrape_jobs(company, country)
+    jobs = await scrape_jobs(request.company, request.country)
     return {"jobs": jobs}
