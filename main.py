@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_sync
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 import random
@@ -24,7 +25,7 @@ app = FastAPI()
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (for testing)
+    allow_origins=["*"],  # Allow all origins
     allow_credentials=True,
     allow_methods=["*"],  # Allow all HTTP methods
     allow_headers=["*"],  # Allow all headers
@@ -42,7 +43,7 @@ async def scrape_jobs(company, country):
     url = f"https://www.linkedin.com/jobs/search/?keywords={query}&location={country}"
 
     async with async_playwright() as p:
-        # Launch the browser with Render-compatible flags
+        # Launch browser with stealth and proxy support
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -53,14 +54,15 @@ async def scrape_jobs(company, country):
                 "--disable-blink-features=AutomationControlled",
             ],
         )
-        context = await browser.new_context()
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            locale="en-US",
+        )
         page = await context.new_page()
+        await stealth_sync(page)  # Apply stealth mode to bypass bot detection
 
         try:
             await page.goto(url, timeout=60000)
-            total_jobs = 0
-
-            # Scrape jobs from multiple pages
             while True:
                 try:
                     # Wait for job cards to load
@@ -80,10 +82,6 @@ async def scrape_jobs(company, country):
 
                             apply_link_element = await job_card.query_selector("a.base-card__full-link")
                             apply_link = await apply_link_element.get_attribute("href") if apply_link_element else "N/A"
-
-                            # Skip if the company name doesn't match
-                            if company.lower().strip() != company_name.lower().strip():
-                                continue
 
                             description = "Description not available"
                             if apply_link != "N/A":
@@ -121,7 +119,6 @@ async def scrape_jobs(company, country):
                                 "description": description.strip(),
                                 "apply_link": apply_link,
                             })
-                            total_jobs += 1
 
                         except Exception as e:
                             print(f"Error processing job card: {e}")
